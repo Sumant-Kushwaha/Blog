@@ -1,0 +1,109 @@
+📘 Project Title:
+SmartBlog – A Collaborative Blogging Platform with User Roles & Rich Blog Editor
+
+🧩 Project Overview:
+Create a full-featured web application using HTML, CSS, JavaScript, and optionally Node.js + Express + MongoDB (or Firebase) as the backend. This platform allows users to read blogs without logging in. But when logged in, users get editing privileges and can collaborate with real blog owners through an approval workflow.
+
+🎯 Key Features to Implement:
+🔐 Authentication System
+User Registration (Sign Up)
+
+Login & Logout functionality
+
+Forget Password (email or local password reset)
+
+Session-based access (or JWT if using backend)
+
+👤 User Roles
+Guest (Not Logged In):
+
+Can view/read blogs only
+
+Logged-in User:
+
+Can create a blog post
+
+Can edit any blog and submit it to the owner for review
+
+Can preview their own drafts
+
+Can save or publish blog posts
+
+Real Blog Owner:
+
+Receives edit suggestions
+
+Can preview, accept, or reject the edits
+
+✍️ Blog Management
+Create a New Blog button opens a Blog Editor Interface
+
+Editor includes:
+
+Title Input
+
+Content Area (WYSIWYG or Markdown editor)
+
+Basic styling options (bold, italic, underline, font size, color, alignment, etc.)
+
+Buttons: Save Draft, Publish Blog
+
+Blog posts can have:
+
+Timestamps
+
+Author names
+
+Edit history (optional)
+
+🔄 Edit & Collaboration Workflow
+A user clicks "Edit" on any blog.
+
+Makes changes → clicks "Send for Approval".
+
+Original author receives a notification.
+
+Owner previews changes.
+
+Accept or reject changes.
+
+🧰 Tech Stack Suggestion:
+Frontend:
+HTML5, CSS3, JavaScript (Vanilla or with framework like React.js)
+
+Optional: Bootstrap or TailwindCSS for styling
+
+Optional: Quill.js / TinyMCE for rich text editor
+
+Backend (Optional):
+Node.js with Express.js
+
+MongoDB (Mongoose) for storing blogs and users
+
+Firebase Authentication (as an alternative)
+
+REST APIs or Firebase Realtime Database
+
+💾 Data Models (Basic Schema Ideas):
+User
+
+ID, Name, Email, Password
+
+Role: Reader / Contributor / Owner
+
+Blog
+
+ID, Title, Content, Author, DateCreated, Status: Draft/Published
+
+SuggestedEdits: [ {editorID, suggestedContent, status} ]
+
+🎨 Bonus Features (Optional):
+Blog search & filter
+
+Dark mode toggle
+
+User profile page
+
+Comments section
+
+Email notifications

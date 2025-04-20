@@ -1,362 +1,417 @@
-import React from "react";
+import { useState, useEffect } from "react";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import { useLocation } from "wouter";
-import { useQuery } from "@tanstack/react-query";
-import { Navbar } from "@/components/layout/navbar";
-import { Footer } from "@/components/layout/footer";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Sidebar } from "@/components/layout/sidebar";
+import { Header } from "@/components/layout/header";
+import { BlogCard } from "@/components/blog/blog-card";
+import { BlogEditorModal } from "@/components/blog/blog-editor-modal";
+import { SuggestionReviewModal } from "@/components/blog/suggestion-review-modal";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Skeleton } from "@/components/ui/skeleton";
+import { BlogWithAuthor, EditSuggestionWithDetails } from "@shared/schema";
 import { useAuth } from "@/hooks/use-auth";
-import { PenSquare, BookOpen, Edit3, Bell, ArrowRight } from "lucide-react";
-import { Blog, Notification } from "@shared/schema";
+import { PlusCircle, AlertTriangle, Loader2 } from "lucide-react";
+import { apiRequest, queryClient } from "@/lib/queryClient";
+import { useToast } from "@/hooks/use-toast";
+import { Badge } from "@/components/ui/badge";
+import { 
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle
+} from "@/components/ui/alert-dialog";
 
 export default function DashboardPage() {
-  const [, navigate] = useLocation();
+  const [location] = useLocation();
+  const { toast } = useToast();
   const { user } = useAuth();
+  
+  // Parse URL query parameters
+  const params = new URLSearchParams(location.split("?")[1]);
+  const tabParam = params.get("tab");
+  const blogIdParam = params.get("blog");
+  const actionParam = params.get("action");
+  
+  // UI state
+  const [activeTab, setActiveTab] = useState(tabParam || "blogs");
+  const [isEditorOpen, setIsEditorOpen] = useState(false);
+  const [isSuggestionReviewOpen, setIsSuggestionReviewOpen] = useState(false);
+  const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
+  const [editorMode, setEditorMode] = useState<"create" | "edit" | "suggestion">("create");
+  const [currentBlog, setCurrentBlog] = useState<BlogWithAuthor | undefined>(undefined);
+  const [currentSuggestion, setCurrentSuggestion] = useState<EditSuggestionWithDetails | undefined>(undefined);
+  const [blogToDelete, setBlogToDelete] = useState<number | null>(null);
   
   // Fetch user's blogs
   const { 
     data: blogs = [], 
     isLoading: isLoadingBlogs 
-  } = useQuery<Blog[]>({
-    queryKey: ["/api/my-blogs"],
+  } = useQuery<BlogWithAuthor[]>({
+    queryKey: ["/api/blogs", { authorId: user?.id }],
     enabled: !!user,
   });
   
-  // Fetch pending edits that need approval
+  // Fetch edit suggestions for user's blogs
   const { 
-    data: pendingEdits = [], 
-    isLoading: isLoadingPendingEdits 
-  } = useQuery({
-    queryKey: ["/api/pending-edits"],
+    data: suggestions = [], 
+    isLoading: isLoadingSuggestions 
+  } = useQuery<EditSuggestionWithDetails[]>({
+    queryKey: ["/api/suggestions"],
     enabled: !!user,
   });
   
-  // Fetch user's notifications
-  const { 
-    data: notifications = [], 
-    isLoading: isLoadingNotifications 
-  } = useQuery<Notification[]>({
-    queryKey: ["/api/notifications"],
-    enabled: !!user,
+  // Filter suggestions for blogs owned by the user and with pending status
+  const pendingApprovals = suggestions.filter(
+    s => blogs.some(b => b.id === s.blogId) && s.status === "pending"
+  );
+  
+  // Delete blog mutation
+  const deleteBlogMutation = useMutation({
+    mutationFn: async (blogId: number) => {
+      await apiRequest("DELETE", `/api/blogs/${blogId}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/blogs"] });
+      toast({
+        title: "Blog deleted",
+        description: "Your blog has been successfully deleted",
+      });
+      setBlogToDelete(null);
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Failed to delete blog",
+        description: error.message,
+        variant: "destructive",
+      });
+      setBlogToDelete(null);
+    },
   });
-
-  // Format date for display
-  const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'long',
-      day: 'numeric'
-    });
+  
+  // Publish blog mutation
+  const publishBlogMutation = useMutation({
+    mutationFn: async (blogId: number) => {
+      await apiRequest("PUT", `/api/blogs/${blogId}`, { status: "published" });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/blogs"] });
+      toast({
+        title: "Blog published",
+        description: "Your blog has been published successfully",
+      });
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Failed to publish blog",
+        description: error.message,
+        variant: "destructive",
+      });
+    },
+  });
+  
+  // Handle URL parameters for opening specific blog/suggestion
+  useEffect(() => {
+    if (tabParam) {
+      setActiveTab(tabParam);
+    }
+    
+    if (blogIdParam && actionParam) {
+      const blogId = parseInt(blogIdParam);
+      if (actionParam === "edit" || actionParam === "suggest") {
+        const blog = blogs.find(b => b.id === blogId);
+        if (blog) {
+          setCurrentBlog(blog);
+          setEditorMode(actionParam as "edit" | "suggestion");
+          setIsEditorOpen(true);
+        }
+      }
+    }
+  }, [tabParam, blogIdParam, actionParam, blogs]);
+  
+  // Handle creating a new blog
+  const handleCreateBlog = () => {
+    setCurrentBlog(undefined);
+    setEditorMode("create");
+    setIsEditorOpen(true);
   };
-
+  
+  // Handle editing a blog
+  const handleEditBlog = (blog: BlogWithAuthor) => {
+    setCurrentBlog(blog);
+    setEditorMode(user?.id === blog.authorId ? "edit" : "suggestion");
+    setIsEditorOpen(true);
+  };
+  
+  // Handle publishing a draft blog
+  const handlePublishBlog = (blogId: number) => {
+    publishBlogMutation.mutate(blogId);
+  };
+  
+  // Handle deleting a blog
+  const handleDeleteConfirm = () => {
+    if (blogToDelete !== null) {
+      deleteBlogMutation.mutate(blogToDelete);
+    }
+  };
+  
+  // Handle opening suggestion review modal
+  const handleReviewSuggestion = (suggestion: EditSuggestionWithDetails) => {
+    setCurrentSuggestion(suggestion);
+    setIsSuggestionReviewOpen(true);
+  };
+  
   return (
-    <div className="flex flex-col min-h-screen">
-      <Navbar />
+    <div className="flex min-h-screen">
+      <Sidebar suggestionsCount={pendingApprovals.length} />
       
-      <main className="flex-grow max-w-7xl mx-auto w-full px-4 py-8">
-        <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 gap-4">
-          <div>
-            <h1 className="text-2xl font-bold">Dashboard</h1>
-            <p className="text-gray-600">Welcome back, {user?.fullName}</p>
+      <div className="flex flex-1 flex-col">
+        <Header />
+        
+        <main className="flex-1 p-4 md:p-6 overflow-auto">
+          <div className="mb-6 flex flex-col justify-between space-y-4 sm:flex-row sm:items-center sm:space-y-0">
+            <div>
+              <h1 className="text-2xl font-bold">Dashboard</h1>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Manage your blogs and collaborations
+              </p>
+            </div>
+            
+            <Button onClick={handleCreateBlog}>
+              <PlusCircle className="mr-2 h-4 w-4" />
+              New Blog
+            </Button>
           </div>
           
-          <Button onClick={() => navigate("/blog/create")}>
-            <PenSquare className="mr-2 h-4 w-4" />
-            Create New Blog
-          </Button>
-        </div>
-        
-        {/* Dashboard Stats */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-gray-500">
-                Total Blogs
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="flex items-center">
-                <BookOpen className="h-5 w-5 text-primary-500 mr-2" />
-                <span className="text-2xl font-bold">
-                  {isLoadingBlogs ? (
-                    <Skeleton className="h-8 w-10 inline-block" />
-                  ) : (
-                    blogs.length
-                  )}
-                </span>
-              </div>
-            </CardContent>
-          </Card>
-          
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-gray-500">
-                Pending Edits
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="flex items-center">
-                <Edit3 className="h-5 w-5 text-amber-500 mr-2" />
-                <span className="text-2xl font-bold">
-                  {isLoadingPendingEdits ? (
-                    <Skeleton className="h-8 w-10 inline-block" />
-                  ) : (
-                    pendingEdits.length
-                  )}
-                </span>
-              </div>
-            </CardContent>
-          </Card>
-          
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-gray-500">
-                Unread Notifications
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="flex items-center">
-                <Bell className="h-5 w-5 text-blue-500 mr-2" />
-                <span className="text-2xl font-bold">
-                  {isLoadingNotifications ? (
-                    <Skeleton className="h-8 w-10 inline-block" />
-                  ) : (
-                    notifications.filter((n: any) => !n.isRead).length
-                  )}
-                </span>
-              </div>
-            </CardContent>
-          </Card>
-        </div>
-        
-        {/* Dashboard Content */}
-        <Tabs defaultValue="pending-edits" className="space-y-6">
-          <TabsList>
-            <TabsTrigger value="pending-edits">Pending Edits</TabsTrigger>
-            <TabsTrigger value="recent-blogs">Recent Blogs</TabsTrigger>
-            <TabsTrigger value="notifications">Notifications</TabsTrigger>
-          </TabsList>
-          
-          {/* Pending Edits Tab */}
-          <TabsContent value="pending-edits">
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-lg">Edits Requiring Your Approval</CardTitle>
-              </CardHeader>
-              <CardContent>
-                {isLoadingPendingEdits ? (
-                  <div className="space-y-4">
-                    {[1, 2].map((i) => (
-                      <div key={i} className="flex justify-between items-center p-4 border rounded-md">
-                        <div className="space-y-2">
-                          <Skeleton className="h-5 w-40" />
-                          <Skeleton className="h-4 w-60" />
-                        </div>
-                        <Skeleton className="h-8 w-16" />
-                      </div>
-                    ))}
-                  </div>
-                ) : pendingEdits.length === 0 ? (
-                  <div className="text-center py-8 text-gray-500">
-                    <Edit3 className="mx-auto h-12 w-12 text-gray-300 mb-2" />
-                    <p>No pending edit suggestions to review</p>
-                  </div>
-                ) : (
-                  <div className="space-y-4">
-                    {pendingEdits.map((edit: any) => (
-                      <div key={edit.version.id} className="flex justify-between items-start p-4 border rounded-md">
-                        <div>
-                          <h3 className="font-medium mb-1">{edit.blogTitle}</h3>
-                          <p className="text-sm text-gray-600 mb-2">
-                            Edited by {edit.editorName} · {new Date(edit.version.createdAt).toLocaleDateString()}
-                          </p>
-                          {edit.version.revisionComment && (
-                            <p className="text-sm italic bg-gray-50 p-2 rounded">
-                              "{edit.version.revisionComment}"
-                            </p>
-                          )}
-                        </div>
-                        <Button 
-                          variant="outline" 
-                          size="sm"
-                          onClick={() => navigate("/dashboard/pending-edits")}
-                        >
-                          Review
-                        </Button>
-                      </div>
-                    ))}
-                    
-                    {pendingEdits.length > 3 && (
-                      <div className="text-center mt-4">
-                        <Button 
-                          variant="link" 
-                          className="text-primary-600"
-                          onClick={() => navigate("/dashboard/pending-edits")}
-                        >
-                          View All Pending Edits <ArrowRight className="ml-1 h-4 w-4" />
-                        </Button>
-                      </div>
-                    )}
-                  </div>
+          <Tabs value={activeTab} onValueChange={setActiveTab}>
+            <TabsList className="grid w-full grid-cols-3 mb-6">
+              <TabsTrigger value="blogs">My Blogs</TabsTrigger>
+              <TabsTrigger value="drafts">Drafts</TabsTrigger>
+              <TabsTrigger value="suggestions" className="relative">
+                Suggestions
+                {pendingApprovals.length > 0 && (
+                  <Badge variant="destructive" className="ml-2 absolute -top-1 -right-1 h-5 w-5 p-0 flex items-center justify-center text-xs">
+                    {pendingApprovals.length}
+                  </Badge>
                 )}
-              </CardContent>
-            </Card>
-          </TabsContent>
-          
-          {/* Recent Blogs Tab */}
-          <TabsContent value="recent-blogs">
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-lg">Your Recent Blogs</CardTitle>
-              </CardHeader>
-              <CardContent>
-                {isLoadingBlogs ? (
-                  <div className="space-y-4">
-                    {[1, 2, 3].map((i) => (
-                      <div key={i} className="p-4 border rounded-md">
-                        <div className="flex justify-between mb-2">
-                          <Skeleton className="h-6 w-40" />
-                          <Skeleton className="h-5 w-20" />
-                        </div>
-                        <Skeleton className="h-4 w-full mb-1" />
-                        <Skeleton className="h-4 w-3/4 mb-2" />
-                        <div className="flex justify-between items-center">
-                          <Skeleton className="h-4 w-32" />
-                          <Skeleton className="h-8 w-16" />
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                ) : blogs.length === 0 ? (
-                  <div className="text-center py-8 text-gray-500">
-                    <BookOpen className="mx-auto h-12 w-12 text-gray-300 mb-2" />
-                    <p>You haven't created any blogs yet</p>
-                    <Button 
-                      variant="link" 
-                      className="text-primary-600 mt-2"
-                      onClick={() => navigate("/blog/create")}
-                    >
-                      Create Your First Blog
-                    </Button>
-                  </div>
-                ) : (
-                  <div className="space-y-4">
-                    {blogs.slice(0, 3).map((blog) => (
-                      <div key={blog.id} className="p-4 border rounded-md">
-                        <div className="flex justify-between items-start mb-2">
-                          <h3 
-                            className="font-medium hover:text-primary-600 cursor-pointer"
-                            onClick={() => navigate(`/blog/${blog.id}`)}
-                          >
-                            {blog.title}
-                          </h3>
-                          <Badge>{blog.category}</Badge>
-                        </div>
-                        <p className="text-sm text-gray-600 mb-2 line-clamp-2">
-                          {blog.excerpt}
-                        </p>
-                        <div className="flex justify-between items-center text-sm">
-                          <span className="text-gray-500">
-                            Published {formatDate(blog.publishedAt)}
-                          </span>
-                          <Button 
-                            variant="link" 
-                            className="p-0 h-auto text-primary-600"
-                            onClick={() => navigate(`/blog/${blog.id}`)}
-                          >
-                            View
-                          </Button>
-                        </div>
-                      </div>
-                    ))}
-                    
-                    {blogs.length > 3 && (
-                      <div className="text-center mt-4">
-                        <Button 
-                          variant="link" 
-                          className="text-primary-600"
-                          onClick={() => navigate("/my-blogs")}
-                        >
-                          View All Blogs <ArrowRight className="ml-1 h-4 w-4" />
-                        </Button>
-                      </div>
-                    )}
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-          </TabsContent>
-          
-          {/* Notifications Tab */}
-          <TabsContent value="notifications">
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-lg">Recent Notifications</CardTitle>
-              </CardHeader>
-              <CardContent>
-                {isLoadingNotifications ? (
-                  <div className="space-y-4">
-                    {[1, 2, 3].map((i) => (
-                      <div key={i} className="p-4 border rounded-md">
-                        <div className="flex justify-between mb-2">
-                          <Skeleton className="h-5 w-32" />
-                          <Skeleton className="h-4 w-24" />
-                        </div>
-                        <Skeleton className="h-4 w-full" />
-                      </div>
-                    ))}
-                  </div>
-                ) : notifications.length === 0 ? (
-                  <div className="text-center py-8 text-gray-500">
-                    <Bell className="mx-auto h-12 w-12 text-gray-300 mb-2" />
-                    <p>No notifications yet</p>
-                  </div>
-                ) : (
-                  <div className="space-y-3">
-                    {notifications.slice(0, 5).map((notification: any) => (
-                      <div 
-                        key={notification.id} 
-                        className={`p-4 border rounded-md ${!notification.isRead ? 'bg-blue-50' : ''}`}
-                      >
-                        <div className="flex justify-between items-start mb-1">
-                          <div className="font-medium">
-                            {notification.type === 'edit_suggestion' ? 'Edit Suggestion' : 
-                            notification.type === 'edit_approved' ? 'Edit Approved' :
-                            notification.type === 'edit_rejected' ? 'Edit Rejected' : 'System Notification'}
+              </TabsTrigger>
+            </TabsList>
+            
+            {/* My Published Blogs Tab */}
+            <TabsContent value="blogs">
+              {isLoadingBlogs ? (
+                <div className="flex justify-center py-12">
+                  <Loader2 className="h-8 w-8 animate-spin text-primary" />
+                </div>
+              ) : (
+                <>
+                  {blogs.filter(blog => blog.status === "published").length > 0 ? (
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                      {blogs
+                        .filter(blog => blog.status === "published")
+                        .map((blog) => (
+                          <BlogCard
+                            key={blog.id}
+                            blog={blog}
+                            onEdit={() => handleEditBlog(blog)}
+                            onDelete={() => {
+                              setBlogToDelete(blog.id);
+                              setIsDeleteDialogOpen(true);
+                            }}
+                          />
+                        ))}
+                    </div>
+                  ) : (
+                    <div className="text-center py-12 bg-muted/20 rounded-lg">
+                      <h3 className="text-lg font-medium">No published blogs yet</h3>
+                      <p className="text-muted-foreground mt-2">
+                        Create a new blog and publish it to see it here
+                      </p>
+                      <Button className="mt-4" onClick={handleCreateBlog}>
+                        <PlusCircle className="mr-2 h-4 w-4" />
+                        Create Blog
+                      </Button>
+                    </div>
+                  )}
+                </>
+              )}
+            </TabsContent>
+            
+            {/* Drafts Tab */}
+            <TabsContent value="drafts">
+              {isLoadingBlogs ? (
+                <div className="flex justify-center py-12">
+                  <Loader2 className="h-8 w-8 animate-spin text-primary" />
+                </div>
+              ) : (
+                <>
+                  {blogs.filter(blog => blog.status === "draft").length > 0 ? (
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                      {blogs
+                        .filter(blog => blog.status === "draft")
+                        .map((blog) => (
+                          <BlogCard
+                            key={blog.id}
+                            blog={blog}
+                            onEdit={() => handleEditBlog(blog)}
+                            onPublish={() => handlePublishBlog(blog.id)}
+                            onDelete={() => {
+                              setBlogToDelete(blog.id);
+                              setIsDeleteDialogOpen(true);
+                            }}
+                          />
+                        ))}
+                    </div>
+                  ) : (
+                    <div className="text-center py-12 bg-muted/20 rounded-lg">
+                      <h3 className="text-lg font-medium">No draft blogs</h3>
+                      <p className="text-muted-foreground mt-2">
+                        Create a new blog and save it as a draft to see it here
+                      </p>
+                      <Button className="mt-4" onClick={handleCreateBlog}>
+                        <PlusCircle className="mr-2 h-4 w-4" />
+                        Create Draft
+                      </Button>
+                    </div>
+                  )}
+                </>
+              )}
+            </TabsContent>
+            
+            {/* Suggestions Tab */}
+            <TabsContent value="suggestions">
+              {isLoadingSuggestions ? (
+                <div className="flex justify-center py-12">
+                  <Loader2 className="h-8 w-8 animate-spin text-primary" />
+                </div>
+              ) : (
+                <>
+                  {pendingApprovals.length > 0 ? (
+                    <div className="space-y-6">
+                      <h2 className="text-xl font-semibold">Pending Edit Suggestions</h2>
+                      
+                      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                        {pendingApprovals.map((suggestion) => (
+                          <div key={suggestion.id} className="border rounded-lg overflow-hidden bg-card">
+                            <div className="p-5">
+                              <div className="flex items-center justify-between">
+                                <Badge variant="outline" className="bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200">
+                                  <span className="mr-1 h-1.5 w-1.5 rounded-full bg-current"></span>
+                                  Pending Review
+                                </Badge>
+                                <span className="text-xs text-muted-foreground">
+                                  {new Date(suggestion.createdAt).toLocaleDateString()}
+                                </span>
+                              </div>
+                              
+                              <div className="mt-4">
+                                <p className="text-sm text-muted-foreground">Original Title:</p>
+                                <h3 className="text-lg font-medium">{suggestion.originalTitle}</h3>
+                              </div>
+                              
+                              <div className="mt-3">
+                                <p className="text-sm text-muted-foreground">Suggested Title:</p>
+                                <h3 className="text-lg font-medium text-primary">{suggestion.suggestedTitle}</h3>
+                              </div>
+                              
+                              <div className="mt-4 flex items-center">
+                                <div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center">
+                                  <span className="text-xs font-medium text-primary">
+                                    {suggestion.editor?.username.substring(0, 2).toUpperCase()}
+                                  </span>
+                                </div>
+                                <div className="ml-2">
+                                  <p className="text-xs">
+                                    Edited by <span className="font-medium">{suggestion.editor?.username}</span>
+                                  </p>
+                                </div>
+                              </div>
+                            </div>
+                            
+                            <div className="bg-muted/50 px-5 py-3 flex justify-between">
+                              <Button 
+                                variant="ghost" 
+                                size="sm" 
+                                className="text-muted-foreground"
+                              >
+                                <svg className="mr-1 h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
+                                </svg>
+                                Add Comment
+                              </Button>
+                              <Button 
+                                variant="ghost" 
+                                size="sm" 
+                                onClick={() => handleReviewSuggestion(suggestion)}
+                              >
+                                Review Changes
+                              </Button>
+                            </div>
                           </div>
-                          <div className="text-xs text-gray-500">
-                            {new Date(notification.createdAt).toLocaleString(undefined, { 
-                              month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
-                            })}
-                          </div>
-                        </div>
-                        <p className="text-sm text-gray-600">{notification.message}</p>
-                        
-                        {notification.type === 'edit_suggestion' && notification.relatedId && (
-                          <div className="mt-2">
-                            <Button 
-                              variant="outline" 
-                              size="sm"
-                              onClick={() => navigate("/dashboard/pending-edits")}
-                            >
-                              Review
-                            </Button>
-                          </div>
-                        )}
+                        ))}
                       </div>
-                    ))}
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-          </TabsContent>
-        </Tabs>
-      </main>
+                    </div>
+                  ) : (
+                    <div className="text-center py-12 bg-muted/20 rounded-lg">
+                      <h3 className="text-lg font-medium">No pending suggestions</h3>
+                      <p className="text-muted-foreground mt-2">
+                        When someone suggests edits to your blogs, they'll appear here
+                      </p>
+                    </div>
+                  )}
+                </>
+              )}
+            </TabsContent>
+          </Tabs>
+        </main>
+      </div>
       
-      <Footer />
+      {/* Blog Editor Modal */}
+      <BlogEditorModal
+        open={isEditorOpen}
+        onOpenChange={setIsEditorOpen}
+        blog={currentBlog}
+        mode={editorMode}
+      />
+      
+      {/* Suggestion Review Modal */}
+      {currentSuggestion && (
+        <SuggestionReviewModal
+          open={isSuggestionReviewOpen}
+          onOpenChange={setIsSuggestionReviewOpen}
+          suggestion={currentSuggestion}
+        />
+      )}
+      
+      {/* Delete Confirmation Dialog */}
+      <AlertDialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Are you sure?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This action cannot be undone. This will permanently delete the
+              selected blog and all its data.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction 
+              onClick={handleDeleteConfirm}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              {deleteBlogMutation.isPending ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <AlertTriangle className="mr-2 h-4 w-4" />
+              )}
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

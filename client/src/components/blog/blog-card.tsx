@@ -1,114 +1,124 @@
-import React from "react";
-import { Card, CardContent } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
+import { Card, CardContent, CardFooter } from "@/components/ui/card";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { formatDistanceToNow } from "date-fns";
+import { MoreHorizontal, Edit, Eye } from "lucide-react";
+import { Link } from "wouter";
+import { useState } from "react";
+import { 
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger
+} from "@/components/ui/dropdown-menu";
+import { BlogWithAuthor } from "@shared/schema";
 import { useAuth } from "@/hooks/use-auth";
-import { useLocation } from "wouter";
-import { Blog, User } from "@shared/schema";
 
 interface BlogCardProps {
-  blog: Blog;
-  author: User;
+  blog: BlogWithAuthor;
+  onEdit?: () => void;
+  onSendForApproval?: () => void;
+  onDelete?: () => void;
+  onPublish?: () => void;
 }
 
-export function BlogCard({ blog, author }: BlogCardProps) {
+export function BlogCard({ blog, onEdit, onSendForApproval, onDelete, onPublish }: BlogCardProps) {
   const { user } = useAuth();
-  const [, navigate] = useLocation();
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
   
-  const readTime = blog.readTime || 5; // fallback to 5 minutes
-  const date = new Date(blog.publishedAt).toLocaleDateString('en-US', {
-    year: 'numeric',
-    month: 'long',
-    day: 'numeric'
-  });
-  
-  const handleReadMore = () => {
-    if (user) {
-      navigate(`/blog/${blog.id}`);
-    } else {
-      navigate('/auth');
-    }
+  const truncate = (str: string, length: number) => {
+    if (!str) return "";
+    return str.length > length ? str.substring(0, length) + "..." : str;
   };
+  
+  const formattedDate = blog.createdAt 
+    ? formatDistanceToNow(new Date(blog.createdAt), { addSuffix: true })
+    : "";
+  
+  const isOwner = user?.id === blog.authorId;
+  const isDraft = blog.status === "draft";
 
   return (
-    <Card className="h-full overflow-hidden hover:shadow-md transition-shadow duration-200">
-      {blog.coverImage && (
-        <div className="h-48 overflow-hidden">
-          <img 
-            src={blog.coverImage} 
-            alt={`Cover image for ${blog.title}`} 
-            className="h-full w-full object-cover"
-          />
-        </div>
-      )}
+    <Card className="overflow-hidden transition-shadow hover:shadow-md">
       <CardContent className="p-5">
-        <div className="flex justify-between items-start mb-2">
-          <h3 className="text-lg font-semibold text-gray-900 hover:text-primary-600 line-clamp-2">
+        <div className="flex items-center justify-between">
+          <Badge variant={isDraft ? "outline" : "default"} className={isDraft ? "text-gray-500" : ""}>
+            <span className="inline-block h-1.5 w-1.5 rounded-full bg-current mr-1"></span>
+            {isDraft ? "Draft" : "Published"}
+          </Badge>
+          
+          <DropdownMenu open={isMenuOpen} onOpenChange={setIsMenuOpen}>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="icon" className="rounded-full">
+                <MoreHorizontal className="h-5 w-5" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={onEdit}>
+                <Edit className="mr-2 h-4 w-4" />
+                <span>Edit</span>
+              </DropdownMenuItem>
+              
+              {isOwner && isDraft && (
+                <DropdownMenuItem onClick={onPublish}>
+                  <Eye className="mr-2 h-4 w-4" />
+                  <span>Publish</span>
+                </DropdownMenuItem>
+              )}
+              
+              {!isOwner && !isDraft && (
+                <DropdownMenuItem onClick={onSendForApproval}>
+                  <Edit className="mr-2 h-4 w-4" />
+                  <span>Suggest Edits</span>
+                </DropdownMenuItem>
+              )}
+              
+              {isOwner && (
+                <DropdownMenuItem 
+                  onClick={onDelete}
+                  className="text-destructive focus:text-destructive"
+                >
+                  <svg className="mr-2 h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                  </svg>
+                  <span>Delete</span>
+                </DropdownMenuItem>
+              )}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+        
+        <Link href={`/blogs/${blog.id}`}>
+          <h3 className="mt-3 cursor-pointer text-lg font-medium line-clamp-1 hover:underline">
             {blog.title}
           </h3>
-          <Badge variant="secondary">{blog.category}</Badge>
-        </div>
+        </Link>
         
-        <p className="text-gray-600 text-sm mb-4 line-clamp-3">
-          {blog.excerpt}
+        <p className="mt-2 text-sm text-muted-foreground line-clamp-2">
+          {blog.excerpt || truncate(blog.content.replace(/<[^>]*>/g, ''), 150)}
         </p>
         
-        <div className="flex items-center justify-between">
-          <div className="flex items-center">
-            {/* Author info */}
-            <div className="flex-shrink-0 mr-2">
-              {/* Use initials as fallback for avatar */}
-              <div className="h-8 w-8 rounded-full bg-primary-100 text-primary-800 flex items-center justify-center text-xs font-medium">
-                {author.fullName.split(' ').map(name => name[0]).join('')}
-              </div>
-            </div>
-            <div>
-              <p className="text-sm font-medium text-gray-900">{author.fullName}</p>
-              <p className="text-xs text-gray-500">{date} · {readTime} min read</p>
-            </div>
+        <div className="mt-4 flex items-center">
+          <Avatar className="h-6 w-6">
+            <AvatarFallback>
+              {blog.author?.username.substring(0, 2).toUpperCase() || "?"}
+            </AvatarFallback>
+          </Avatar>
+          <div className="ml-2">
+            <p className="text-xs text-muted-foreground">
+              <span className="font-medium text-foreground">{blog.author?.username || "Unknown"}</span> • {formattedDate}
+            </p>
           </div>
-          
-          <Button 
-            variant="link" 
-            className="text-primary-600 hover:text-primary-800 text-sm font-medium"
-            onClick={handleReadMore}
-          >
-            {user ? "Read More" : "Sign in to read"}
-          </Button>
         </div>
       </CardContent>
-    </Card>
-  );
-}
-
-export function BlogCardSkeleton() {
-  return (
-    <Card className="h-full overflow-hidden">
-      <div className="h-48 bg-gray-200 animate-pulse" />
-      <CardContent className="p-5">
-        <div className="flex justify-between items-start mb-2">
-          <div className="h-6 bg-gray-200 animate-pulse w-3/4 rounded" />
-          <div className="h-6 bg-gray-200 animate-pulse w-1/5 rounded-full" />
+      
+      <CardFooter className="bg-muted/50 px-5 py-3">
+        <div className="flex justify-between text-xs text-muted-foreground w-full">
+          <span>124 views</span>
+          <span>8 comments</span>
         </div>
-        
-        <div className="space-y-2 mb-4">
-          <div className="h-4 bg-gray-200 animate-pulse w-full rounded" />
-          <div className="h-4 bg-gray-200 animate-pulse w-full rounded" />
-          <div className="h-4 bg-gray-200 animate-pulse w-2/3 rounded" />
-        </div>
-        
-        <div className="flex items-center justify-between">
-          <div className="flex items-center">
-            <div className="h-8 w-8 rounded-full bg-gray-200 animate-pulse mr-2" />
-            <div className="space-y-1">
-              <div className="h-4 bg-gray-200 animate-pulse w-24 rounded" />
-              <div className="h-3 bg-gray-200 animate-pulse w-32 rounded" />
-            </div>
-          </div>
-          
-          <div className="h-5 bg-gray-200 animate-pulse w-20 rounded" />
-        </div>
-      </CardContent>
+      </CardFooter>
     </Card>
   );
 }

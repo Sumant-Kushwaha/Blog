@@ -1,77 +1,77 @@
 import { 
-  users, User, InsertUser, blogs, Blog, InsertBlog,
-  blogVersions, BlogVersion, InsertBlogVersion,
-  notifications, Notification, InsertNotification
+  users, 
+  User, 
+  InsertUser, 
+  blogs, 
+  Blog, 
+  InsertBlog, 
+  editSuggestions, 
+  EditSuggestion, 
+  InsertEditSuggestion,
+  comments,
+  Comment,
+  InsertComment
 } from "@shared/schema";
 import session from "express-session";
 import createMemoryStore from "memorystore";
 
-// modify the interface with any CRUD methods
-// you might need
+const MemoryStore = createMemoryStore(session);
 
+// Interface for storage operations
 export interface IStorage {
   // User operations
   getUser(id: number): Promise<User | undefined>;
   getUserByUsername(username: string): Promise<User | undefined>;
   getUserByEmail(email: string): Promise<User | undefined>;
-  getUserByVerificationToken(token: string): Promise<User | undefined>;
-  getUserByResetToken(token: string): Promise<User | undefined>;
-  createUser(user: InsertUser & { verificationToken: string }): Promise<User>;
-  verifyUser(id: number): Promise<User>;
-  updateUserResetToken(id: number, token: string, expiry: Date): Promise<User>;
-  updateUserPassword(id: number, password: string): Promise<User>;
+  createUser(user: InsertUser): Promise<User>;
   
   // Blog operations
-  createBlog(blog: InsertBlog): Promise<Blog>;
   getBlog(id: number): Promise<Blog | undefined>;
-  getBlogsByAuthor(authorId: number): Promise<Blog[]>;
-  getAllBlogs(): Promise<Blog[]>;
-  updateBlog(id: number, blog: Partial<Blog>): Promise<Blog>;
-  deleteBlog(id: number): Promise<void>;
+  getBlogs(filter?: { authorId?: number; status?: string }): Promise<Blog[]>;
+  createBlog(blog: InsertBlog): Promise<Blog>;
+  updateBlog(id: number, blog: Partial<Blog>): Promise<Blog | undefined>;
+  deleteBlog(id: number): Promise<boolean>;
   
-  // BlogVersion operations
-  createBlogVersion(version: InsertBlogVersion): Promise<BlogVersion>;
-  getBlogVersion(id: number): Promise<BlogVersion | undefined>;
-  getBlogVersionsByBlog(blogId: number): Promise<BlogVersion[]>;
-  getPendingBlogVersions(authorId: number): Promise<BlogVersion[]>;
-  approveBlogVersion(id: number): Promise<BlogVersion>;
-  rejectBlogVersion(id: number): Promise<BlogVersion>;
+  // Edit suggestion operations
+  getEditSuggestion(id: number): Promise<EditSuggestion | undefined>;
+  getEditSuggestions(filter?: { blogId?: number; editorId?: number; status?: string }): Promise<EditSuggestion[]>;
+  createEditSuggestion(suggestion: InsertEditSuggestion): Promise<EditSuggestion>;
+  updateEditSuggestion(id: number, suggestion: Partial<EditSuggestion>): Promise<EditSuggestion | undefined>;
   
-  // Notification operations
-  createNotification(notification: InsertNotification): Promise<Notification>;
-  getNotificationsByUser(userId: number): Promise<Notification[]>;
-  markNotificationAsRead(id: number): Promise<Notification>;
-  getUnreadNotificationsCount(userId: number): Promise<number>;
+  // Comment operations
+  getComment(id: number): Promise<Comment | undefined>;
+  getComments(filter?: { blogId?: number; authorId?: number }): Promise<Comment[]>;
+  createComment(comment: InsertComment): Promise<Comment>;
+  updateComment(id: number, comment: Partial<Comment>): Promise<Comment | undefined>;
+  deleteComment(id: number): Promise<boolean>;
   
   // Session store
-  sessionStore: session.SessionStore;
+  sessionStore: any; // Using any to bypass the SessionStore type issue
 }
 
-// In-memory implementation
 export class MemStorage implements IStorage {
   private users: Map<number, User>;
   private blogs: Map<number, Blog>;
-  private blogVersions: Map<number, BlogVersion>;
-  private notifications: Map<number, Notification>;
+  private editSuggestions: Map<number, EditSuggestion>;
+  private comments: Map<number, Comment>;
   private userIdCounter: number;
   private blogIdCounter: number;
-  private blogVersionIdCounter: number;
-  private notificationIdCounter: number;
-  sessionStore: session.SessionStore;
+  private suggestionIdCounter: number;
+  private commentIdCounter: number;
+  
+  sessionStore: any; // Using any to bypass the SessionStore type issue
 
   constructor() {
     this.users = new Map();
     this.blogs = new Map();
-    this.blogVersions = new Map();
-    this.notifications = new Map();
+    this.editSuggestions = new Map();
+    this.comments = new Map();
     this.userIdCounter = 1;
     this.blogIdCounter = 1;
-    this.blogVersionIdCounter = 1;
-    this.notificationIdCounter = 1;
-    
-    const MemoryStore = createMemoryStore(session);
+    this.suggestionIdCounter = 1;
+    this.commentIdCounter = 1;
     this.sessionStore = new MemoryStore({
-      checkPeriod: 86400000, // prune expired entries every 24h
+      checkPeriod: 86400000 // 24 hours
     });
   }
 
@@ -92,297 +92,179 @@ export class MemStorage implements IStorage {
     );
   }
 
-  async getUserByVerificationToken(token: string): Promise<User | undefined> {
-    return Array.from(this.users.values()).find(
-      (user) => user.verificationToken === token
-    );
-  }
-
-  async getUserByResetToken(token: string): Promise<User | undefined> {
-    return Array.from(this.users.values()).find(
-      (user) => user.resetToken === token
-    );
-  }
-
-  async createUser(insertUser: InsertUser & { verificationToken: string }): Promise<User> {
+  async createUser(insertUser: InsertUser): Promise<User> {
     const id = this.userIdCounter++;
-    const now = new Date();
+    const createdAt = new Date();
+    // Ensure role has a default value
+    const role = insertUser.role || "user";
     const user: User = { 
       ...insertUser, 
+      role,
       id, 
-      isVerified: false,
-      resetToken: null,
-      resetTokenExpiry: null
+      createdAt 
     };
     this.users.set(id, user);
     return user;
   }
 
-  async verifyUser(id: number): Promise<User> {
-    const user = this.users.get(id);
-    if (!user) {
-      throw new Error(`User not found: ${id}`);
-    }
-    
-    const updatedUser: User = {
-      ...user,
-      isVerified: true,
-      verificationToken: null,
-    };
-    
-    this.users.set(id, updatedUser);
-    return updatedUser;
-  }
-
-  async updateUserResetToken(id: number, token: string, expiry: Date): Promise<User> {
-    const user = this.users.get(id);
-    if (!user) {
-      throw new Error(`User not found: ${id}`);
-    }
-    
-    const updatedUser: User = {
-      ...user,
-      resetToken: token,
-      resetTokenExpiry: expiry,
-    };
-    
-    this.users.set(id, updatedUser);
-    return updatedUser;
-  }
-
-  async updateUserPassword(id: number, password: string): Promise<User> {
-    const user = this.users.get(id);
-    if (!user) {
-      throw new Error(`User not found: ${id}`);
-    }
-    
-    const updatedUser: User = {
-      ...user,
-      password,
-      resetToken: null,
-      resetTokenExpiry: null,
-    };
-    
-    this.users.set(id, updatedUser);
-    return updatedUser;
-  }
-
   // Blog operations
-  async createBlog(blog: InsertBlog): Promise<Blog> {
-    const id = this.blogIdCounter++;
-    const now = new Date();
-    const newBlog: Blog = {
-      ...blog,
-      id,
-      publishedAt: now,
-      updatedAt: now,
-    };
-    
-    this.blogs.set(id, newBlog);
-    return newBlog;
-  }
-
   async getBlog(id: number): Promise<Blog | undefined> {
     return this.blogs.get(id);
   }
 
-  async getBlogsByAuthor(authorId: number): Promise<Blog[]> {
-    return Array.from(this.blogs.values()).filter(
-      (blog) => blog.authorId === authorId
-    );
-  }
-
-  async getAllBlogs(): Promise<Blog[]> {
-    return Array.from(this.blogs.values());
-  }
-
-  async updateBlog(id: number, update: Partial<Blog>): Promise<Blog> {
-    const blog = this.blogs.get(id);
-    if (!blog) {
-      throw new Error(`Blog not found: ${id}`);
+  async getBlogs(filter?: { authorId?: number; status?: string }): Promise<Blog[]> {
+    let blogs = Array.from(this.blogs.values());
+    
+    if (filter) {
+      if (filter.authorId) {
+        blogs = blogs.filter(blog => blog.authorId === filter.authorId);
+      }
+      if (filter.status) {
+        blogs = blogs.filter(blog => blog.status === filter.status);
+      }
     }
     
-    const updatedBlog: Blog = {
-      ...blog,
-      ...update,
-      updatedAt: new Date(),
+    // Sort by createdAt, newest first
+    return blogs.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+  }
+
+  async createBlog(insertBlog: InsertBlog): Promise<Blog> {
+    const id = this.blogIdCounter++;
+    const createdAt = new Date();
+    const updatedAt = new Date();
+    // Ensure status and excerpt have default values
+    const status = insertBlog.status || "draft";
+    const excerpt = insertBlog.excerpt || null;
+    const blog: Blog = { 
+      ...insertBlog, 
+      status,
+      excerpt,
+      id, 
+      createdAt, 
+      updatedAt 
+    };
+    this.blogs.set(id, blog);
+    return blog;
+  }
+
+  async updateBlog(id: number, blogUpdate: Partial<Blog>): Promise<Blog | undefined> {
+    const blog = this.blogs.get(id);
+    if (!blog) return undefined;
+    
+    const updatedBlog = { 
+      ...blog, 
+      ...blogUpdate, 
+      updatedAt: new Date() 
     };
     
     this.blogs.set(id, updatedBlog);
     return updatedBlog;
   }
 
-  async deleteBlog(id: number): Promise<void> {
-    if (!this.blogs.has(id)) {
-      throw new Error(`Blog not found: ${id}`);
-    }
-    
-    this.blogs.delete(id);
-    
-    // Also delete any associated versions
-    const versions = await this.getBlogVersionsByBlog(id);
-    for (const version of versions) {
-      this.blogVersions.delete(version.id);
-    }
+  async deleteBlog(id: number): Promise<boolean> {
+    return this.blogs.delete(id);
   }
 
-  // BlogVersion operations
-  async createBlogVersion(version: InsertBlogVersion): Promise<BlogVersion> {
-    const id = this.blogVersionIdCounter++;
-    const now = new Date();
-    const newVersion: BlogVersion = {
-      ...version,
-      id,
-      createdAt: now,
-      isApproved: false,
-      isRejected: false,
+  // Edit suggestion operations
+  async getEditSuggestion(id: number): Promise<EditSuggestion | undefined> {
+    return this.editSuggestions.get(id);
+  }
+
+  async getEditSuggestions(filter?: { blogId?: number; editorId?: number; status?: string }): Promise<EditSuggestion[]> {
+    let suggestions = Array.from(this.editSuggestions.values());
+    
+    if (filter) {
+      if (filter.blogId) {
+        suggestions = suggestions.filter(suggestion => suggestion.blogId === filter.blogId);
+      }
+      if (filter.editorId) {
+        suggestions = suggestions.filter(suggestion => suggestion.editorId === filter.editorId);
+      }
+      if (filter.status) {
+        suggestions = suggestions.filter(suggestion => suggestion.status === filter.status);
+      }
+    }
+    
+    // Sort by createdAt, newest first
+    return suggestions.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+  }
+
+  async createEditSuggestion(insertSuggestion: InsertEditSuggestion): Promise<EditSuggestion> {
+    const id = this.suggestionIdCounter++;
+    const createdAt = new Date();
+    // Ensure status and comment have default values
+    const status = insertSuggestion.status || "pending";
+    const comment = insertSuggestion.comment || null;
+    const suggestion: EditSuggestion = { 
+      ...insertSuggestion, 
+      status,
+      comment,
+      id, 
+      createdAt 
+    };
+    this.editSuggestions.set(id, suggestion);
+    return suggestion;
+  }
+
+  async updateEditSuggestion(id: number, suggestionUpdate: Partial<EditSuggestion>): Promise<EditSuggestion | undefined> {
+    const suggestion = this.editSuggestions.get(id);
+    if (!suggestion) return undefined;
+    
+    const updatedSuggestion = { 
+      ...suggestion, 
+      ...suggestionUpdate
     };
     
-    this.blogVersions.set(id, newVersion);
+    this.editSuggestions.set(id, updatedSuggestion);
+    return updatedSuggestion;
+  }
+  
+  // Comment operations
+  async getComment(id: number): Promise<Comment | undefined> {
+    return this.comments.get(id);
+  }
+
+  async getComments(filter?: { blogId?: number; authorId?: number }): Promise<Comment[]> {
+    let comments = Array.from(this.comments.values());
     
-    // Create notification for the blog author
-    const blog = await this.getBlog(version.blogId);
-    if (blog && blog.authorId !== version.editorId) {
-      const editor = await this.getUser(version.editorId);
-      await this.createNotification({
-        userId: blog.authorId,
-        message: `${editor?.fullName || 'Someone'} suggested edits to your blog "${blog.title}"`,
-        type: 'edit_suggestion',
-        relatedId: id,
-      });
+    if (filter) {
+      if (filter.blogId) {
+        comments = comments.filter(comment => comment.blogId === filter.blogId);
+      }
+      if (filter.authorId) {
+        comments = comments.filter(comment => comment.authorId === filter.authorId);
+      }
     }
     
-    return newVersion;
+    // Sort by createdAt, newest first
+    return comments.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
   }
 
-  async getBlogVersion(id: number): Promise<BlogVersion | undefined> {
-    return this.blogVersions.get(id);
+  async createComment(insertComment: InsertComment): Promise<Comment> {
+    const id = this.commentIdCounter++;
+    const createdAt = new Date();
+    const updatedAt = new Date();
+    const comment: Comment = { ...insertComment, id, createdAt, updatedAt };
+    this.comments.set(id, comment);
+    return comment;
   }
 
-  async getBlogVersionsByBlog(blogId: number): Promise<BlogVersion[]> {
-    return Array.from(this.blogVersions.values()).filter(
-      (version) => version.blogId === blogId
-    );
-  }
-
-  async getPendingBlogVersions(authorId: number): Promise<BlogVersion[]> {
-    // Get all blogs by this author
-    const authorBlogs = await this.getBlogsByAuthor(authorId);
-    const authorBlogIds = authorBlogs.map(blog => blog.id);
+  async updateComment(id: number, commentUpdate: Partial<Comment>): Promise<Comment | undefined> {
+    const comment = this.comments.get(id);
+    if (!comment) return undefined;
     
-    // Find all pending versions for those blogs
-    return Array.from(this.blogVersions.values()).filter(
-      (version) => 
-        authorBlogIds.includes(version.blogId) && 
-        !version.isApproved && 
-        !version.isRejected
-    );
-  }
-
-  async approveBlogVersion(id: number): Promise<BlogVersion> {
-    const version = this.blogVersions.get(id);
-    if (!version) {
-      throw new Error(`Blog version not found: ${id}`);
-    }
-    
-    // Update the version
-    const updatedVersion: BlogVersion = {
-      ...version,
-      isApproved: true,
+    const updatedComment = { 
+      ...comment, 
+      ...commentUpdate, 
+      updatedAt: new Date() 
     };
     
-    this.blogVersions.set(id, updatedVersion);
-    
-    // Update the blog with the new version's content
-    const blog = await this.getBlog(version.blogId);
-    if (blog) {
-      await this.updateBlog(blog.id, {
-        title: version.title,
-        content: version.content,
-        excerpt: version.excerpt,
-        updatedAt: new Date(),
-      });
-      
-      // Create notification for the editor
-      await this.createNotification({
-        userId: version.editorId,
-        message: `Your suggested edits to "${blog.title}" have been approved`,
-        type: 'edit_approved',
-        relatedId: blog.id,
-      });
-    }
-    
-    return updatedVersion;
+    this.comments.set(id, updatedComment);
+    return updatedComment;
   }
 
-  async rejectBlogVersion(id: number): Promise<BlogVersion> {
-    const version = this.blogVersions.get(id);
-    if (!version) {
-      throw new Error(`Blog version not found: ${id}`);
-    }
-    
-    // Update the version
-    const updatedVersion: BlogVersion = {
-      ...version,
-      isRejected: true,
-    };
-    
-    this.blogVersions.set(id, updatedVersion);
-    
-    // Create notification for the editor
-    const blog = await this.getBlog(version.blogId);
-    if (blog) {
-      await this.createNotification({
-        userId: version.editorId,
-        message: `Your suggested edits to "${blog.title}" have been rejected`,
-        type: 'edit_rejected',
-        relatedId: blog.id,
-      });
-    }
-    
-    return updatedVersion;
-  }
-
-  // Notification operations
-  async createNotification(notification: InsertNotification): Promise<Notification> {
-    const id = this.notificationIdCounter++;
-    const now = new Date();
-    const newNotification: Notification = {
-      ...notification,
-      id,
-      isRead: false,
-      createdAt: now,
-    };
-    
-    this.notifications.set(id, newNotification);
-    return newNotification;
-  }
-
-  async getNotificationsByUser(userId: number): Promise<Notification[]> {
-    return Array.from(this.notifications.values())
-      .filter(notification => notification.userId === userId)
-      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime()); // newest first
-  }
-
-  async markNotificationAsRead(id: number): Promise<Notification> {
-    const notification = this.notifications.get(id);
-    if (!notification) {
-      throw new Error(`Notification not found: ${id}`);
-    }
-    
-    const updatedNotification: Notification = {
-      ...notification,
-      isRead: true,
-    };
-    
-    this.notifications.set(id, updatedNotification);
-    return updatedNotification;
-  }
-
-  async getUnreadNotificationsCount(userId: number): Promise<number> {
-    return (await this.getNotificationsByUser(userId))
-      .filter(notification => !notification.isRead)
-      .length;
+  async deleteComment(id: number): Promise<boolean> {
+    return this.comments.delete(id);
   }
 }
 

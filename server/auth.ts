@@ -5,8 +5,8 @@ import session from "express-session";
 import { scrypt, randomBytes, timingSafeEqual } from "crypto";
 import { promisify } from "util";
 import { storage } from "./storage";
-import { User as SelectUser } from "@shared/schema";
-import { sendVerificationEmail } from "./email";
+import { User as SelectUser, insertUserSchema } from "@shared/schema";
+import { z } from "zod";
 
 declare global {
   namespace Express {
@@ -16,7 +16,7 @@ declare global {
 
 const scryptAsync = promisify(scrypt);
 
-export async function hashPassword(password: string) {
+async function hashPassword(password: string) {
   const salt = randomBytes(16).toString("hex");
   const buf = (await scryptAsync(password, salt, 64)) as Buffer;
   return `${buf.toString("hex")}.${salt}`;
@@ -29,19 +29,16 @@ async function comparePasswords(supplied: string, stored: string) {
   return timingSafeEqual(hashedBuf, suppliedBuf);
 }
 
-export function generateToken() {
-  return randomBytes(32).toString("hex");
-}
-
 export function setupAuth(app: Express) {
   const sessionSettings: session.SessionOptions = {
-    secret: process.env.SESSION_SECRET || "blogcollab-session-secret",
+    secret: process.env.SESSION_SECRET || "smartblog-secret-key",
     resave: false,
     saveUninitialized: false,
     store: storage.sessionStore,
     cookie: {
-      maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
-    }
+      secure: process.env.NODE_ENV === "production",
+      maxAge: 1000 * 60 * 60 * 24 * 7, // 1 week
+    },
   };
 
   app.set("trust proxy", 1);
@@ -50,77 +47,94 @@ export function setupAuth(app: Express) {
   app.use(passport.session());
 
   passport.use(
-    new LocalStrategy(
-      { usernameField: "email" },
-      async (email, password, done) => {
-        const user = await storage.getUserByEmail(email);
+    new LocalStrategy(async (username, password, done) => {
+      try {
+        // Check if username is actually an email
+        const isEmail = username.includes('@');
+        const user = isEmail 
+          ? await storage.getUserByEmail(username)
+          : await storage.getUserByUsername(username);
+          
         if (!user || !(await comparePasswords(password, user.password))) {
-          return done(null, false);
-        } else if (!user.isVerified) {
-          return done(null, false, { message: "Email not verified" });
+          return done(null, false, { message: "Invalid credentials" });
         } else {
           return done(null, user);
         }
+      } catch (err) {
+        return done(err);
       }
-    )
+    }),
   );
 
   passport.serializeUser((user, done) => done(null, user.id));
   passport.deserializeUser(async (id: number, done) => {
-    const user = await storage.getUser(id);
-    done(null, user);
+    try {
+      const user = await storage.getUser(id);
+      done(null, user);
+    } catch (err) {
+      done(err);
+    }
+  });
+
+  // Extended schema with validation
+  const registerSchema = insertUserSchema.extend({
+    email: z.string().email("Invalid email address"),
+    username: z.string().min(3, "Username must be at least 3 characters").max(20, "Username must be less than 20 characters"),
+    password: z.string().min(6, "Password must be at least 6 characters"),
   });
 
   app.post("/api/register", async (req, res, next) => {
     try {
-      const { email, username } = req.body;
+      // Validate request body
+      const validatedData = registerSchema.parse(req.body);
       
-      // Check if email already exists
-      const existingEmailUser = await storage.getUserByEmail(email);
-      if (existingEmailUser) {
-        return res.status(400).json({ message: "Email already registered" });
+      // Check if user already exists
+      const existingUserByUsername = await storage.getUserByUsername(validatedData.username);
+      if (existingUserByUsername) {
+        return res.status(400).json({ message: "Username already exists" });
       }
       
-      // Check if username already exists
-      const existingUsernameUser = await storage.getUserByUsername(username);
-      if (existingUsernameUser) {
-        return res.status(400).json({ message: "Username already taken" });
+      const existingUserByEmail = await storage.getUserByEmail(validatedData.email);
+      if (existingUserByEmail) {
+        return res.status(400).json({ message: "Email already exists" });
       }
-      
-      // Generate verification token
-      const verificationToken = generateToken();
-      
+
       // Create user with hashed password
       const user = await storage.createUser({
-        ...req.body,
-        password: await hashPassword(req.body.password),
-        verificationToken,
+        ...validatedData,
+        password: await hashPassword(validatedData.password),
       });
-      
-      // Send verification email
-      await sendVerificationEmail(user.email, user.fullName, verificationToken);
-      
-      // Return success without logging in
-      return res.status(201).json({ 
-        message: "Registration successful! Please check your email to verify your account.",
-        verified: false
+
+      // Remove password from response
+      const { password, ...userWithoutPassword } = user;
+
+      // Log the user in
+      req.login(user, (err) => {
+        if (err) return next(err);
+        res.status(201).json(userWithoutPassword);
       });
     } catch (error) {
-      next(error);
+      if (error instanceof z.ZodError) {
+        res.status(400).json({ message: error.errors[0].message });
+      } else {
+        next(error);
+      }
     }
   });
 
   app.post("/api/login", (req, res, next) => {
-    passport.authenticate("local", (err, user, info) => {
+    passport.authenticate('local', (err, user, info) => {
       if (err) return next(err);
       if (!user) {
-        const message = info?.message || "Invalid email or password";
-        return res.status(401).json({ message });
+        return res.status(401).json({ message: info?.message || "Invalid credentials" });
       }
       
       req.login(user, (err) => {
         if (err) return next(err);
-        return res.status(200).json(user);
+        
+        // Remove password from response
+        const { password, ...userWithoutPassword } = user;
+        res.status(200).json(userWithoutPassword);
       });
     })(req, res, next);
   });
@@ -134,69 +148,30 @@ export function setupAuth(app: Express) {
 
   app.get("/api/user", (req, res) => {
     if (!req.isAuthenticated()) return res.sendStatus(401);
-    res.json(req.user);
+    
+    // Remove password from response
+    const { password, ...userWithoutPassword } = req.user;
+    res.json(userWithoutPassword);
   });
 
-  app.get("/api/verify-email/:token", async (req, res, next) => {
-    try {
-      const { token } = req.params;
-      const user = await storage.getUserByVerificationToken(token);
-      
-      if (!user) {
-        return res.status(400).json({ message: "Invalid or expired verification token" });
-      }
-      
-      // Verify the user
-      await storage.verifyUser(user.id);
-      
-      return res.status(200).json({ message: "Email verified successfully. You can now login." });
-    } catch (error) {
-      next(error);
+  // Password reset (simplified version without actual email sending)
+  app.post("/api/forgot-password", async (req, res) => {
+    const { email } = req.body;
+    
+    if (!email) {
+      return res.status(400).json({ message: "Email is required" });
     }
-  });
 
-  app.post("/api/forgot-password", async (req, res, next) => {
-    try {
-      const { email } = req.body;
-      const user = await storage.getUserByEmail(email);
-      
-      // Don't reveal if user exists for security
-      if (!user) {
-        return res.status(200).json({ message: "If your email is registered, you will receive a password reset link." });
-      }
-      
-      // Generate reset token and expiry
-      const resetToken = generateToken();
-      const resetTokenExpiry = new Date(Date.now() + 3600000); // 1 hour from now
-      
-      // Update user with reset token
-      await storage.updateUserResetToken(user.id, resetToken, resetTokenExpiry);
-      
-      // Send password reset email (will be implemented in email.ts)
-      // await sendPasswordResetEmail(user.email, user.fullName, resetToken);
-      
-      return res.status(200).json({ message: "If your email is registered, you will receive a password reset link." });
-    } catch (error) {
-      next(error);
+    const user = await storage.getUserByEmail(email);
+    if (!user) {
+      // Still return success to prevent email enumeration
+      return res.status(200).json({ message: "If your email exists in our system, you will receive a password reset link" });
     }
-  });
 
-  app.post("/api/reset-password", async (req, res, next) => {
-    try {
-      const { token, password } = req.body;
-      
-      const user = await storage.getUserByResetToken(token);
-      
-      if (!user || !user.resetTokenExpiry || user.resetTokenExpiry < new Date()) {
-        return res.status(400).json({ message: "Invalid or expired reset token" });
-      }
-      
-      // Update password and clear reset token
-      await storage.updateUserPassword(user.id, await hashPassword(password));
-      
-      return res.status(200).json({ message: "Password reset successful. You can now login with your new password." });
-    } catch (error) {
-      next(error);
-    }
+    // In a real application, we would generate a token, save it, and send an email
+    // For the MVP, we'll just return a success message
+    res.status(200).json({ 
+      message: "If your email exists in our system, you will receive a password reset link" 
+    });
   });
 }

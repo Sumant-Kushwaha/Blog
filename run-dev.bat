@@ -1,0 +1,3 @@
+@echo off
+echo Starting SmartBlog in development mode...
+node dev-windows.js

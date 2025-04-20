@@ -60,8 +60,9 @@ app.use((req, res, next) => {
   // this serves both the API and the client.
   // It is the only port that is not firewalled.
   const port = 5000;
-  // Use the simplest form of server.listen for better compatibility
-  server.listen(port, "127.0.0.1", () => {
+  
+  // Use a simpler listen approach that should work on Windows
+  server.listen(port, () => {
     log(`serving on port ${port}`);
   });
 })();

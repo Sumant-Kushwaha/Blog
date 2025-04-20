@@ -1,0 +1,57 @@
+cross-env NODE_ENV=development tsx server/index.ts
+cross-env: The term 'cross-env' is not recognized as a name of a cmdlet, function, script file, or executable program.
+Check the spelling of the name, or if a path was included, verify that the path is correct and try again.
+PS C:\Users\Amigo\Documents\Vs-Code\SmartBlogPlatform> npx cross-env NODE_ENV=development tsx server/index.ts
+node:events:496
+      throw er; // Unhandled 'error' event
+      ^
+
+Error: listen ENOTSUP: operation not supported on socket 0.0.0.0:5000
+    at Server.setupListenHandle [as _listen2] (node:net:1915:21)
+    at listenInCluster (node:net:1994:12)
+    at node:net:2203:7
+    at process.processTicksAndRejections (node:internal/process/task_queues:90:21)
+Emitted 'error' event on Server instance at:
+    at emitErrorNT (node:net:1973:8)
+    at process.processTicksAndRejections (node:internal/process/task_queues:90:21) {
+  code: 'ENOTSUP',
+  errno: -4049,
+  syscall: 'listen',
+  address: '0.0.0.0',
+  port: 5000
+}
+
+Node.js v22.14.0
+PS C:\Users\Amigo\Documents\Vs-Code\SmartBlogPlatform> npm run dev
+
+> rest-express@1.0.0 dev
+> NODE_ENV=development tsx server/index.ts
+
+'NODE_ENV' is not recognized as an internal or external command,
+operable program or batch file.
+PS C:\Users\Amigo\Documents\Vs-Code\SmartBlogPlatform> SET NODE_ENV=development && tsx server/index.ts
+tsx: The term 'tsx' is not recognized as a name of a cmdlet, function, script file, or executable program.
+Check the spelling of the name, or if a path was included, verify that the path is correct and try again.
+PS C:\Users\Amigo\Documents\Vs-Code\SmartBlogPlatform> node_modules\.bin\cross-env NODE_ENV=development tsx server/index.ts
+'tsx' is not recognized as an internal or external command,
+operable program or batch file.
+node:events:496
+      throw er; // Unhandled 'error' event
+      ^
+
+Error: spawn tsx ENOENT
+    at notFoundError (C:\Users\Amigo\Documents\Vs-Code\SmartBlogPlatform\node_modules\cross-spawn\lib\enoent.js:6:26)        
+    at verifyENOENT (C:\Users\Amigo\Documents\Vs-Code\SmartBlogPlatform\node_modules\cross-spawn\lib\enoent.js:40:16)        
+    at cp.emit (C:\Users\Amigo\Documents\Vs-Code\SmartBlogPlatform\node_modules\cross-spawn\lib\enoent.js:27:25)
+    at ChildProcess._handle.onexit (node:internal/child_process:293:12)
+Emitted 'error' event on ChildProcess instance at:
+    at cp.emit (C:\Users\Amigo\Documents\Vs-Code\SmartBlogPlatform\node_modules\cross-spawn\lib\enoent.js:30:37)
+    at ChildProcess._handle.onexit (node:internal/child_process:293:12) {
+  code: 'ENOENT',
+  errno: 'ENOENT',
+  syscall: 'spawn tsx',
+  path: 'tsx',
+  spawnargs: [ 'server/index.ts' ]
+}
+
+Node.js v22.14.0
